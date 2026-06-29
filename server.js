@@ -108,8 +108,6 @@ async function loadPersonas() {
     }
   }
   log("WARN", "PERSONAS_NOT_FOUND", { file: PERSONAS_FILE });
-  return Promise.resolve([]);
-  // Auto-download from GitHub
   log("INFO", "PERSONAS_DOWNLOAD", { url: GIT_PERSONAS_URL });
   try {
     const https = require("https");
