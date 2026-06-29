@@ -1,0 +1,26 @@
+[
+  {
+    "id": "ae5d77e3-d81c-433c-8d69-c3c9375d2f6f",
+    "client_id": "anonymous",
+    "messages": 1,
+    "status": "active",
+    "created_at": "2026-06-29T14:31:27.421Z",
+    "expires_at": "2026-06-30T14:31:27.421Z"
+  },
+  {
+    "id": "8d5cccc5-9d6d-469b-8f4e-ed378d827a77",
+    "client_id": "anonymous",
+    "messages": 1,
+    "status": "active",
+    "created_at": "2026-06-29T14:33:01.704Z",
+    "expires_at": "2026-06-30T14:33:01.704Z"
+  },
+  {
+    "id": "d8bc4c29-1130-457f-a504-5e1a77e2521d",
+    "client_id": "anonymous",
+    "messages": 1,
+    "status": "active",
+    "created_at": "2026-06-29T14:36:58.236Z",
+    "expires_at": "2026-06-30T14:36:58.236Z"
+  }
+]
