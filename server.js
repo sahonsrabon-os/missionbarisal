@@ -1501,7 +1501,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ═══ POST /api/mission ═══════════════════════
+    // ═══ POST /api/mission (with optional SSE streaming) ═══
     if (url === "/api/mission" && req.method === "POST") {
       STATS.totalRequests++;
       if (AGENTS.length === 0) {
@@ -1551,6 +1551,61 @@ const server = http.createServer(async (req, res) => {
       }
 
       log("INFO", "REQUEST", { session: sessionId.slice(0, 8) });
+
+      // ─── SSE Streaming mode ───
+      const wantsSSE = req.headers.accept && req.headers.accept.includes("text/event-stream");
+      if (wantsSSE) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+        });
+
+        // Override push functions to write SSE events
+        const originalPushLog = pushLog;
+        const originalPushAgent = pushAgentStatus;
+        const originalPushOutput = pushOutput;
+        const originalPushDone = pushDone;
+
+        pushLog = async (type, message) => {
+          const sse = JSON.stringify({ type, message, time: new Date().toISOString() });
+          res.write("event: log\ndata: " + sse + "\n\n");
+          // Also try Pusher
+          await originalPushLog(type, message);
+        };
+        pushAgentStatus = async (agentId, status) => {
+          const sse = JSON.stringify({ agent: agentId, status, time: new Date().toISOString() });
+          res.write("event: agent-status\ndata: " + sse + "\n\n");
+          await originalPushAgent(agentId, status);
+        };
+        pushOutput = async (output) => {
+          const sse = JSON.stringify({ output, time: new Date().toISOString() });
+          res.write("event: output\ndata: " + sse + "\n\n");
+          await originalPushOutput(output);
+        };
+        pushDone = async (stats) => {
+          const sse = JSON.stringify({ stats, time: new Date().toISOString() });
+          res.write("event: done\ndata: " + sse + "\n\n");
+          await originalPushDone(stats);
+        };
+
+        const result = await executeMission(userInput, context, sessionId);
+
+        // Restore originals
+        pushLog = originalPushLog;
+        pushAgentStatus = originalPushAgent;
+        pushOutput = originalPushOutput;
+        pushDone = originalPushDone;
+
+        // Send final result
+        const finalSSE = JSON.stringify({ ...result, session_id: sessionId });
+        res.write("event: complete\ndata: " + finalSSE + "\n\n");
+        res.end();
+        return;
+      }
+
+      // ─── Normal JSON mode (no SSE) ───
       const result = await executeMission(userInput, context, sessionId);
       jsonResponse(res, result.success ? 200 : 500, {
         ...result,
