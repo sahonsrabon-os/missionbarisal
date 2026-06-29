@@ -1251,7 +1251,7 @@ checkConnection();
             chat.insertBefore(div, typing);
           }
           const el = document.getElementById('stream-output');
-          el.innerHTML = d.output.replace(/\n/g, '<br>') + '<span class="msg-time">🔴 লাইভ</span>';
+          el.innerHTML = d.output.replace(/\\n/g, '<br>') + '<span class="msg-time">🔴 লাইভ</span>';
           scrollBottom();
         }
       });
