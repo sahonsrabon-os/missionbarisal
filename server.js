@@ -94,20 +94,21 @@ function extractPersona(block) {
 }
 
 // ─── Load Personas ────────────────────────────────────────────
-function loadPersonas() {
+async function loadPersonas() {
   if (fs.existsSync(PERSONAS_FILE)) {
     try {
       const content = fs.readFileSync(PERSONAS_FILE, "utf8");
       const agents = parsePersonas(content);
       if (agents.length > 0) {
         log("INFO", "PERSONAS_LOADED", { source: "local", count: agents.length });
-        return agents;
+        return Promise.resolve(agents);
       }
     } catch (e) {
       log("WARN", "PERSONAS_PARSE_FAIL", { error: e.message });
     }
   }
   log("WARN", "PERSONAS_NOT_FOUND", { file: PERSONAS_FILE });
+  return Promise.resolve([]);
   // Auto-download from GitHub
   log("INFO", "PERSONAS_DOWNLOAD", { url: GIT_PERSONAS_URL });
   try {
@@ -203,7 +204,7 @@ async function agentSearch(agent, query) {
   }
   return null;
 }
-const AGENTS = loadPersonas();
+let AGENTS = [];
 const STATS = { totalRequests: 0, totalAgents: AGENTS.length, models: FREE_MODELS.length, startTime: Date.now() };
 
 // ══════════════════════════════════════════════════════════════
@@ -533,10 +534,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ─── Start ──────────────────────────────────────────────────
-server.listen(PORT, "0.0.0.0", () => {
-  log("INFO", "START", { port: PORT, agents: AGENTS.length });
-  console.log("\n🎭 মিশন বরিশাল v2 · http://localhost:" + PORT + " · " + AGENTS.length + " agents from PERSONAS.md\n");
-});
+async function init() {
+  AGENTS = await loadPersonas();
+  if (AGENTS.length === 0) {
+    log("WARN", "START_NO_AGENTS", {});
+  }
+  server.listen(PORT, "0.0.0.0", () => {
+    log("INFO", "START", { port: PORT, agents: AGENTS.length });
+    console.log("\n🎭 মিশন বরিশাল v2 · http://localhost:" + PORT + " · " + AGENTS.length + " agents" + (AGENTS.length > 0 ? " from PERSONAS.md" : " ⚠️ NO AGENTS") + "\n");
+  });
+}
+init();
 
 process.on("SIGINT", () => { log("INFO", "SHUTDOWN", {}); server.close(() => process.exit(0)); });
 process.on("SIGTERM", () => { log("INFO", "SHUTDOWN", {}); server.close(() => process.exit(0)); });
