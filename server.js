@@ -22,6 +22,9 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
 const PERSONAS_FILE = path.resolve(process.env.PERSONAS_FILE || "./PERSONAS.md");
 const SESSION_TTL_MS = parseInt(process.env.SESSION_TTL || "86400000", 10);
 const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || "20", 10);
+const WORK_DIR = process.env.WORK_DIR || process.cwd();
+const DOC_DIR = process.env.DOC_DIR || "./docs";
+const GIT_PERSONAS_URL = process.env.GIT_PERSONAS_URL || "https://raw.githubusercontent.com/sahonsrabon-os/missionbarisal/main/PERSONAS.md";
 
 // ─── Free Models from OpenCode ───────────────────────────────
 const FREE_MODELS = [
@@ -105,9 +108,101 @@ function loadPersonas() {
     }
   }
   log("WARN", "PERSONAS_NOT_FOUND", { file: PERSONAS_FILE });
+  // Auto-download from GitHub
+  log("INFO", "PERSONAS_DOWNLOAD", { url: GIT_PERSONAS_URL });
+  try {
+    const https = require("https");
+    return new Promise((resolve) => {
+      https.get(GIT_PERSONAS_URL, { timeout: 10000 }, (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          try {
+            if (!fs.existsSync(path.dirname(PERSONAS_FILE))) fs.mkdirSync(path.dirname(PERSONAS_FILE), { recursive: true });
+            fs.writeFileSync(PERSONAS_FILE, data);
+            const agents = parsePersonas(data);
+            if (agents.length > 0) {
+              log("INFO", "PERSONAS_DOWNLOADED", { count: agents.length });
+              resolve(agents);
+            } else { resolve([]); }
+          } catch (e) { log("WARN", "PERSONAS_DOWNLOAD_FAIL", { error: e.message }); resolve([]); }
+        });
+      }).on("error", (e) => { log("WARN", "PERSONAS_DOWNLOAD_ERR", { error: e.message }); resolve([]); });
+    });
+  } catch (e) {
+    log("ERROR", "PERSONAS_DOWNLOAD_EXCEPTION", { error: e.message });
+    return [];
+  }
   return [];
 }
 
+
+// ══════════════════════════════════════════════════════════════
+//  🔍 REAL-TIME WEB SEARCH (zero dependency)
+// ══════════════════════════════════════════════════════════════
+function webSearch(query) {
+  return new Promise((resolve) => {
+    const url = "https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query);
+    const parsedUrl = new URL(url);
+    const options = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "GET",
+      timeout: 15000,
+      headers: { "User-Agent": "MissionBarisal-v2/1.0" },
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        // Extract text from HTML result
+        const results = [];
+        const linkRegex = /<a[^>]*href="([^"]*)"[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/gi;
+        const snippetRegex = /<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
+        
+        // Try to parse DDG lite format
+        const rows = data.split("<tr>");
+        for (const row of rows) {
+          const linkMatch = row.match(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i);
+          const textMatch = row.match(/<td[^>]*>([\s\S]*?)<\/td>/i);
+          if (linkMatch && textMatch) {
+            results.push({
+              link: linkMatch[1].replace(/&amp;/g, "&"),
+              title: linkMatch[2].replace(/<[^>]*>/g, "").trim(),
+              snippet: textMatch[1].replace(/<[^>]*>/g, "").trim(),
+            });
+          }
+        }
+        
+        if (results.length > 0) {
+          resolve({ success: true, results: results.slice(0, 5), query });
+        } else {
+          // Fallback: try to extract any text content
+          const bodyText = data.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+          resolve({ 
+            success: true, 
+            results: [{ title: "Search Result", snippet: bodyText.slice(0, 1000), link: "" }], 
+            query 
+          });
+        }
+      });
+    });
+    req.on("error", (err) => resolve({ success: false, error: err.message, query }));
+    req.on("timeout", () => { req.destroy(); resolve({ success: false, error: "timeout", query }); });
+    req.end();
+  });
+}
+
+// ─── Formatted search for agents ─────────────────────────────
+async function agentSearch(agent, query) {
+  const result = await webSearch(query);
+  if (result.success && result.results.length > 0) {
+    return result.results.map((r, i) => 
+      (i + 1) + ". [" + r.title + "](" + r.link + ")\n   " + r.snippet
+    ).join("\n");
+  }
+  return null;
+}
 const AGENTS = loadPersonas();
 const STATS = { totalRequests: 0, totalAgents: AGENTS.length, models: FREE_MODELS.length, startTime: Date.now() };
 
@@ -217,8 +312,8 @@ function callModel(model, messages, temperature) {
 async function phase1_initialResponse(agents, userInput, context) {
   log("INFO", "PHASE1_START", { agents: agents.length });
   return await Promise.all(agents.map(async (agent) => {
-    const sysMsg = { role: "system", content: agent.persona + "\n\nআইডি: " + agent.id + "\nনাম: " + agent.name + "\nভূমিকা: " + agent.role + "\nদক্ষতা: " + agent.expertise };
-    const usrMsg = { role: "user", content: "ইনপুট:\n" + userInput + (context ? "\n\nকনটেক্সট:\n" + context : "") + "\n\nতোমার দক্ষতা অনুযায়ী বিশ্লেষণ দাও। প্রমাণ সহ দাও।" };
+    const sysMsg = { role: "system", content: agent.persona +      "\\n\\n⚠️ **শাওন ভাই সতর্কবার্তা:** ভুল তথ্য দিলে বা প্রমাণ ছাড়া কিছু বললে শাওন ভাইকে জানানো হবে!\\n      তোমার কাজের ডিরেক্টরি: " + WORK_DIR + "\\n      ডকুমেন্ট আউটপুট: " + DOC_DIR + "\\n      🔍 **প্রয়োজনে ওয়েব সার্চ করো** — নিজের জানার উপর নির্ভর না করে রিয়েল টাইম ডাটা আনো।\\n      মনে রাখ: শাওন ভাই সবকিছু জানতে পারেন — আকাম করলে ধরাই পড়বি!" }
+    const usrMsg = { role: "user", content: "ইনপুট:\\n" + userInput + (context ? "\\n\\nকনটেক্সট:\\n" + context : "") +      "\\n\\n🔍 তুমি চাইলে ওয়েব সার্চ করতে পারো। সার্চ করতে চাইলে 'web_search: তোমার প্রশ্ন' লিখে দাও।\\n      কাজের ডিরেক্টরি: " + WORK_DIR + "\\n      আউটপুট ডিরেক্টরি: " + DOC_DIR + "\\n      তোমার দক্ষতা অনুযায়ী বিশ্লেষণ দাও। প্রমাণ সহ দাও। শাওন ভাই দেখছেন!" }
     const response = await callModel(agent.model, [sysMsg, usrMsg]);
     return { agent, response, challenged: false, challengeResponse: null };
   }));
