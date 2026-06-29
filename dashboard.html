@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>🎭 Mission Barisal — Live Dashboard</title>
+<script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,'Noto Sans Bengali',sans-serif;background:#0a0e14;color:#e2e8f0;padding:20px}
+h1{color:#f59e0b;text-align:center;margin-bottom:16px}
+h2{color:#f59e0b;font-size:1.1em;margin-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-bottom:16px}
+.card{background:#131a24;border:1px solid #1e293b;border-radius:10px;padding:16px}
+.agent-card{background:#131a24;border:1px solid #1e293b;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.agent-name{color:#f59e0b;font-weight:600;font-size:0.9em}
+.agent-role{color:#94a3b8;font-size:0.75em}
+.status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.s-working{background:#fbbf24;animation:pulse 1s infinite}
+.s-done{background:#34d399}
+.s-idle{background:#64748b}
+@keyframes pulse{0%{opacity:1}50%{opacity:0.3}100%{opacity:1}}
+.event-log{background:#0d1117;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;font-family:monospace;font-size:0.8em}
+.event{padding:3px 0;border-bottom:1px solid #1e293b;color:#7ee787}
+.event .t{color:#64748b;margin-right:6px}
+.b{display:inline-block;padding:1px 6px;border-radius:4px;font-size:0.7em;margin-right:4px;font-weight:600}
+.b-p{background:#1e3a5f;color:#60a5fa}
+.b-a{background:#3b1f4e;color:#c084fc}
+.b-o{background:#064e3b;color:#34d399}
+.b-e{background:#4c1d1d;color:#f87171}
+.b-s{background:#78350f;color:#fbbf24}
+.row{display:flex;gap:8px;margin:10px 0}
+.row input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #1e293b;background:#1e293b;color:#e2e8f0;font-size:0.9em}
+.row button{padding:10px 24px;border-radius:8px;border:none;background:#f59e0b;color:#0a0e14;font-weight:600;cursor:pointer}
+.out{background:#0d1117;border-radius:8px;padding:12px;margin:10px 0;min-height:80px;white-space:pre-wrap;font-size:0.85em;max-height:400px;overflow-y:auto;color:#e2e8f0}
+.nav a{color:#60a5fa;text-decoration:none;padding:4px 12px;border:1px solid #1e293b;border-radius:6px;font-size:0.8em;margin-right:4px}
+.ftr{text-align:center;color:#475569;font-size:0.75em;margin-top:16px;padding-top:12px;border-top:1px solid #1e293b}
+</style>
+</head>
+<body>
+<h1>🎭 Mission Barisal</h1>
+<div class="nav"><a href="/">🏠 Identity</a><a href="/api/agents">🤖 Agents</a><a href="/health">💚 Health</a></div>
+<h2 style="color:#94a3b8;text-align:center;font-weight:400;font-size:0.9em">📍 Real-time Multi-Agent Dashboard · Pusher + REST Fallback</h2>
+
+<div class="grid">
+  <div class="card">
+    <h2>🚀 Mission Control</h2>
+    <div class="row">
+      <input id="inp" placeholder="বলেন ভাইয়া কী করবেন?" onkeydown="if(event.key==='Enter')go()">
+      <button onclick="go()">GO</button>
+    </div>
+    <div id="out" class="out">⏳ অপেক্ষা...</div>
+  </div>
+  <div class="card">
+    <h2>🤖 Squad</h2>
+    <div id="squad"><div style="color:#64748b">Loading...</div></div>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #1e293b">
+      <h2 style="font-size:0.9em">📡 Connection</h2>
+      <div id="conn-status" style="color:#64748b;font-size:0.8em">🔌 Connecting...</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>📜 Live Feed</h2>
+  <div id="log" class="event-log">Initializing...</div>
+</div>
+
+<div class="ftr">🏴 Mission Barisal · Zero Dependency · Owner: Sahon Srabon · Dhaka</div>
+
+<script>
+const API = window.location.origin;
+const PUSHER_KEY = 'b99355f977e758d4ec15';
+const CLUSTER = 'ap2';
+
+let pusher = null;
+let ch = null;
+
+function el(id){return document.getElementById(id)}
+function log(type, msg){
+  const c = el('log');
+  const ts = new Date().toLocaleTimeString();
+  const badges = {p:'b-p',a:'b-a',o:'b-o',e:'b-e',s:'b-s',system:''};
+  const labels = {p:'PHASE',a:'AGENT',o:'OUTPUT',e:'ERROR',s:'STATS'};
+  const d = document.createElement('div');
+  d.className = 'event';
+  const b = badges[type]||'';
+  const lb = labels[type]||type;
+  d.innerHTML = `<span class="t">[${ts}]</span>${b?'<span class="b '+b+'">'+lb+'</span>':''} ${msg}`;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+}
+
+async function api(path, data){
+  const opt = {method: data ? 'POST' : 'GET', headers:{'Content-Type':'application/json'}};
+  if(data) opt.body = JSON.stringify(data);
+  const r = await fetch(API+path, opt);
+  return await r.json();
+}
+
+async function go(){
+  const inp = el('inp').value.trim();
+  if(!inp) return;
+  el('out').textContent = '⏳ Processing via '+(pusher&&ch?'Pusher':'REST fallback')+'...';
+  log('s','🚀 Mission: "'+inp.slice(0,60)+'"');
+  try {
+    const res = await api('/api/mission', {input:inp});
+    if(res.combined) el('out').textContent = res.combined;
+    if(res.stats) log('s','✅ Done: '+res.stats.responded+'/'+res.stats.totalAgents+' agents · '+(res.timing?.elapsed/1000).toFixed(1)+'s');
+    if(res.session_id) log('s','🔑 Session: '+res.session_id.slice(0,8));
+  } catch(e){
+    log('e','❌ '+e.message);
+    el('out').textContent = 'Error: '+e.message;
+  }
+}
+
+function connectPusher(){
+  try {
+    pusher = new Pusher(PUSHER_KEY, {cluster: CLUSTER});
+    ch = pusher.subscribe('mission-barisal');
+    ch.bind('agent-status', d => {
+      const dot = document.getElementById('dot-'+d.agent);
+      if(dot) dot.className = 'status-dot s-'+(d.status||'idle');
+    });
+    ch.bind('mission-log', d => log(d.type||'system', d.message));
+    ch.bind('mission-output', d => { if(d.output) el('out').textContent = d.output });
+    ch.bind('mission-done', d => log('s','🏁 Complete'));
+    el('conn-status').textContent = '✅ Pusher Connected';
+    log('system','✅ Pusher live');
+  } catch(e){
+    el('conn-status').textContent = '⚠️ Pusher failed, using REST';
+    log('e','Pusher: '+e.message);
+  }
+}
+
+async function loadSquad(){
+  try {
+    const d = await api('/api/agents');
+    if(d.agents){
+      el('squad').innerHTML = d.agents.map(a =>
+        '<div class="agent-card"><div class="status-dot s-idle" id="dot-'+a.id+'"></div><div><div class="agent-name">'+a.name+'</div><div class="agent-role">'+a.role+' · '+a.model+'</div></div></div>'
+      ).join('');
+    }
+  } catch(e){ el('squad').innerHTML = '<div style="color:#f87171">Failed to load</div>' }
+}
+
+loadSquad();
+connectPusher();
+log('system','✅ Dashboard ready · '+(pusher?'Pusher':'REST')+' mode');
+</script>
+</body>
+</html>

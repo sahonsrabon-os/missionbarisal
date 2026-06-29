@@ -26,6 +26,13 @@ const WORK_DIR = process.env.WORK_DIR || process.cwd();
 const DOC_DIR = process.env.DOC_DIR || "./docs";
 const GIT_PERSONAS_URL = process.env.GIT_PERSONAS_URL || "https://raw.githubusercontent.com/sahonsrabon-os/missionbarisal/main/PERSONAS.md";
 
+// ─── Pusher Config (optional — zero-dep, built-in crypto) ────
+const PUSHER_APP_ID = process.env.PUSHER_APP_ID || "2171810";
+const PUSHER_KEY = process.env.PUSHER_KEY || "b99355f977e758d4ec15";
+const PUSHER_SECRET = process.env.PUSHER_SECRET || "9bc97706077a2defa16e";
+const PUSHER_CLUSTER = process.env.PUSHER_CLUSTER || "ap2";
+const PUSHER_ENABLED = !!(PUSHER_APP_ID && PUSHER_KEY && PUSHER_SECRET);
+
 // ─── Free Models from OpenCode ───────────────────────────────
 const FREE_MODELS = [
   "deepseek-v4-flash-free",
@@ -202,6 +209,72 @@ async function agentSearch(agent, query) {
   }
   return null;
 }
+
+// ══════════════════════════════════════════════════════════════
+//  📡 PUSHER REAL-TIME EVENTS (zero-dep, REST API)
+// ══════════════════════════════════════════════════════════════
+function triggerPusherEvent(channel, eventName, data) {
+  return new Promise((resolve) => {
+    if (!PUSHER_ENABLED) { resolve({ success: false, reason: "Pusher not configured" }); return; }
+    
+    const body = JSON.stringify({ data: JSON.stringify(data), name: eventName, channel: channel });
+    const bodyMd5 = crypto.createHash("md5").update(body).digest("hex");
+    const timestamp = Math.floor(Date.now() / 1000);
+    
+    const authString = "POST\n/apps/" + PUSHER_APP_ID + "/events\n" +
+      "auth_key=" + PUSHER_KEY + "&auth_timestamp=" + timestamp + "&auth_version=1.0&body_md5=" + bodyMd5;
+    const signature = crypto.createHmac("sha256", PUSHER_SECRET).update(authString).digest("hex");
+    
+    const url = "https://api-" + PUSHER_CLUSTER + ".pusher.com/apps/" + PUSHER_APP_ID + "/events?" +
+      "body_md5=" + bodyMd5 + "&auth_version=1.0&auth_key=" + PUSHER_KEY + "&auth_timestamp=" + timestamp + "&auth_signature=" + signature;
+    
+    const parsedUrl = new URL(url);
+    const options = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "POST",
+      timeout: 10000,
+      headers: { "Content-Type": "application/json" },
+    };
+    
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => resolve({ success: res.statusCode === 202 || res.statusCode === 200, status: res.statusCode, data }));
+    });
+    req.on("error", (err) => resolve({ success: false, error: err.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ success: false, error: "timeout" }); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Push mission events in real-time ────────────────────────
+async function pushLog(type, message) {
+  if (!PUSHER_ENABLED) return;
+  await triggerPusherEvent("mission-barisal", "mission-log", { type, message, time: new Date().toISOString() });
+}
+async function pushAgentStatus(agentId, status) {
+  if (!PUSHER_ENABLED) return;
+  await triggerPusherEvent("mission-barisal", "agent-status", { agent: agentId, status, time: new Date().toISOString() });
+}
+async function pushOutput(output) {
+  if (!PUSHER_ENABLED) return;
+  await triggerPusherEvent("mission-barisal", "mission-output", { output, time: new Date().toISOString() });
+}
+async function pushDone(stats) {
+  if (!PUSHER_ENABLED) return;
+  await triggerPusherEvent("mission-barisal", "mission-done", { stats, time: new Date().toISOString() });
+}
+async function agentSearch(agent, query) {
+  const result = await webSearch(query);
+  if (result.success && result.results.length > 0) {
+    return result.results.map((r, i) => 
+      (i + 1) + ". [" + r.title + "](" + r.link + ")\n   " + r.snippet
+    ).join("\n");
+  }
+  return null;
+}
 let AGENTS = [];
 const STATS = { totalRequests: 0, totalAgents: AGENTS.length, models: FREE_MODELS.length, startTime: Date.now() };
 
@@ -310,7 +383,10 @@ function callModel(model, messages, temperature) {
 
 async function phase1_initialResponse(agents, userInput, context) {
   log("INFO", "PHASE1_START", { agents: agents.length });
+  await pushLog("phase", "Phase 1 শুরু: " + agents.length + " এজেন্ট কাজ করছে");
   return await Promise.all(agents.map(async (agent) => {
+    await pushAgentStatus(agent.id, "working");
+    await pushLog("agent", "🔍 " + agent.name + " কাজ শুরু করেছে");
     const sysMsg = { role: "system", content: agent.persona +      "\\n\\n⚠️ **শাওন ভাই সতর্কবার্তা:** ভুল তথ্য দিলে বা প্রমাণ ছাড়া কিছু বললে শাওন ভাইকে জানানো হবে!\\n      তোমার কাজের ডিরেক্টরি: " + WORK_DIR + "\\n      ডকুমেন্ট আউটপুট: " + DOC_DIR + "\\n      🔍 **প্রয়োজনে ওয়েব সার্চ করো** — নিজের জানার উপর নির্ভর না করে রিয়েল টাইম ডাটা আনো।\\n      মনে রাখ: শাওন ভাই সবকিছু জানতে পারেন — আকাম করলে ধরাই পড়বি!" }
     const usrMsg = { role: "user", content: "ইনপুট:\\n" + userInput + (context ? "\\n\\nকনটেক্সট:\\n" + context : "") +      "\\n\\n🔍 তুমি চাইলে ওয়েব সার্চ করতে পারো। সার্চ করতে চাইলে 'web_search: তোমার প্রশ্ন' লিখে দাও।\\n      কাজের ডিরেক্টরি: " + WORK_DIR + "\\n      আউটপুট ডিরেক্টরি: " + DOC_DIR + "\\n      তোমার দক্ষতা অনুযায়ী বিশ্লেষণ দাও। প্রমাণ সহ দাও। শাওন ভাই দেখছেন!" }
     const response = await callModel(agent.model, [sysMsg, usrMsg]);
@@ -404,8 +480,12 @@ async function executeMission(userInput, context, sessionId) {
     if (output.combined) saveMemory(sessionId, "assistant", output.combined);
     updateSession(sessionId, { messages: (getSession(sessionId)?.messages || 0) + 1 });
   }
-  log("INFO", "MISSION_COMPLETE", { elapsed: Date.now() - startTime });
-  return { ...output, timing: { elapsed: Date.now() - startTime }, timestamp: new Date().toISOString(), session_id: sessionId };
+  const elapsed = Date.now() - startTime;
+  log("INFO", "MISSION_COMPLETE", { elapsed });
+  await pushLog("phase", "Phase 3 সম্পন্ন ✅");
+  await pushOutput(output.combined);
+  await pushDone(output.stats);
+  return { ...output, timing: { elapsed }, timestamp: new Date().toISOString(), session_id: sessionId };
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -467,7 +547,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url === "/health") {
-      jsonResponse(res, 200, { healthy: true, version: "2.0.0", agents: AGENTS.length, models: FREE_MODELS.length, uptime: Math.floor((Date.now() - STATS.startTime) / 1000) });
+      jsonResponse(res, 200, { healthy: true, version: "2.0.0", agents: AGENTS.length, models: FREE_MODELS.length, pusher: PUSHER_ENABLED, uptime: Math.floor((Date.now() - STATS.startTime) / 1000) });
       return;
     }
 
@@ -521,6 +601,42 @@ const server = http.createServer(async (req, res) => {
       log("INFO", "REQUEST", { session: sessionId.slice(0, 8) });
       const result = await executeMission(userInput, context, sessionId);
       jsonResponse(res, result.success ? 200 : 500, { ...result, session_id: sessionId });
+      return;
+    }
+
+    // ═══ POST /api/pusher/trigger — manual Pusher event ═════
+    if (url === "/api/pusher/trigger" && req.method === "POST") {
+      const body = await readBody(req);
+      let parsed;
+      try { parsed = JSON.parse(body); } catch (e) {
+        jsonResponse(res, 400, { error: "Invalid JSON" });
+        return;
+      }
+      if (!PUSHER_ENABLED) {
+        jsonResponse(res, 400, { error: "Pusher not configured. Set PUSHER_APP_ID, PUSHER_KEY, PUSHER_SECRET" });
+        return;
+      }
+      const result = await triggerPusherEvent(
+        parsed.channel || "mission-barisal",
+        parsed.event || "custom-event",
+        parsed.data || { message: "triggered" }
+      );
+      jsonResponse(res, result.success ? 200 : 502, result);
+      return;
+    }
+
+    // ═══ GET /dashboard — Interactive HTML Dashboard ═══════════
+    if (url === "/dashboard") {
+      const dashboardPath = path.join(__dirname, "dashboard.html");
+      if (fs.existsSync(dashboardPath)) {
+        const html = fs.readFileSync(dashboardPath, "utf8");
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html);
+      } else {
+        // Fallback: inline minimal dashboard
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`<!DOCTYPE html><html><head><title>Dashboard</title></head><body><h1>📊 Dashboard</h1><p>dashboard.html not found. Create it or run from the project directory.</p><p>Pusher: ${PUSHER_ENABLED ? "✅" : "❌"} | Agents: ${AGENTS.length}</p></body></html>`);
+      }
       return;
     }
 
