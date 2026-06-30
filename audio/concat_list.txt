@@ -1,0 +1,7 @@
+file '/home/sahon/Desktop/missionbarisal/audio/01-code-guru.mp3'
+file '/home/sahon/Desktop/missionbarisal/audio/02-bug-hunter.mp3'
+file '/home/sahon/Desktop/missionbarisal/audio/03-security-hero.mp3'
+file '/home/sahon/Desktop/missionbarisal/audio/04-perf-wizard.mp3'
+file '/home/sahon/Desktop/missionbarisal/audio/05-doc-king.mp3'
+file '/home/sahon/Desktop/missionbarisal/audio/06-qa-tyrant.mp3'
+file '/home/sahon/Desktop/missionbarisal/audio/07-finale.mp3'
